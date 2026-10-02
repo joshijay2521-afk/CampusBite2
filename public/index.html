@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ff6b1a">
+<title>CampusBite — Campus ka apna snack stop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topStrip"><div>⚡ <b>CampusBite</b> — Campus ki cravings, ab door nahi.</div><div>🚚 Quick campus delivery · 💵 COD available</div></div>
+<header class="siteHeader">
+  <div class="headerInner">
+    <a class="brand" href="/" aria-label="CampusBite home"><span class="brandMark">🍔</span><span><b>Campus</b><strong>Bite</strong><small>your campus. your cravings.</small></span></a>
+    <span class="locationPill">📍 <span>Fast delivery on campus</span></span>
+    <div class="headerActions"><button class="ghostBtn" onclick="orders()">📦 <span>My Orders</span></button><button class="cartBtn" onclick="cartOpen()">🛒 <span>Cart</span><b id="count">0</b></button></div>
+  </div>
+</header>
+<main>
+<section class="hero" id="hero">
+  <div class="heroText"><div class="eyebrow" id="heroEyebrow">⚡ QUICK CAMPUS DELIVERY</div><h1 id="heroTitle">Your cravings.<br><em>Campus delivered.</em></h1><p id="heroSubtitle">Biscuits, chips, chocolates, drinks & everyday student essentials — just a few taps away.</p><div class="heroBtns"><button class="cta" onclick="document.querySelector('#products').scrollIntoView({behavior:'smooth'})" id="heroButton">Shop now <span>→</span></button><button class="heroMini" onclick="document.querySelector('#categories').scrollIntoView({behavior:'smooth'})">Explore categories</button></div><div class="heroTrust"><span>✓ Freshly packed</span><span>✓ Student-friendly prices</span><span>✓ Easy COD</span></div></div>
+  <div class="heroArt" id="heroArt"><div class="floatSnack s1">🍪</div><div class="floatSnack s2">🍫</div><div class="floatSnack s3">🥤</div><div class="floatSnack s4">🍟</div><div class="heroSticker">CAMPUS<br><b>CRAVINGS</b> ✨</div></div>
+</section>
+<section class="benefitRow"><div><span>⚡</span><div><b>Quick campus drop</b><small>From our shelf to your room</small></div></div><div><span>💸</span><div><b>Student-friendly</b><small>Simple prices, no surprises</small></div></div><div><span>💬</span><div><b>Real-time support</b><small>Chat with CampusBite</small></div></div><div><span>🔒</span><div><b>COD checkout</b><small>Pay when it arrives</small></div></div></section>
+<section id="categories" class="categorySection"><div class="sectionTitle"><div><span class="sectionKicker">BROWSE YOUR MOOD</span><h2>What are you craving? 😋</h2></div><p>Pick a lane and find your campus favourites.</p></div><div id="cats" class="categoryTiles"></div></section>
+<section class="searchSection"><div class="searchBox"><span>🔎</span><input id="q" oninput="searchSuggest();render()" onkeydown="if(event.key==='Enter')render()" placeholder="Search chips, biscuits, chocolates, drinks..." autocomplete="off"><button class="clearSearch" onclick="clearSearch()">×</button><div id="suggestions" class="suggestions"></div></div><button class="trackBtn" onclick="orders()">📦 Track an order</button></section>
+<section id="products" class="productArea"><div class="sectionTitle productTitle"><div><span class="sectionKicker">CAMPUSBITE MENU</span><h2>Grab something good ✨</h2></div><span id="num" class="itemCount"></span></div><div id="grid"></div></section>
+<section class="whySection"><div class="whyCard"><div class="whyIcon">🧡</div><div><span class="sectionKicker">MADE FOR CAMPUS LIFE</span><h2>Small cravings. Big relief.</h2><p>Whether it’s a late-night study session, a lecture break or a sudden chocolate emergency — CampusBite keeps your essentials close.</p><div class="whyPoints"><span>🍪 Study snacks</span><span>🥤 Chill-time drinks</span><span>🍫 Sweet fixes</span><span>🎒 Daily essentials</span></div></div></div></section>
+<section class="features"><div><b>🚚 Campus delivery</b><small>Track every order status</small></div><div><b>💬 Live chat</b><small>Talk to CampusBite admin</small></div><div><b>💵 Cash on delivery</b><small>Pay when you receive</small></div></section>
+</main>
+<footer><div class="footerBrand"><span class="brandMark">🍔</span><b>Campus<span>Bite</span></b></div><p>Campus ka apna snack stop. Made for hungry students. ❤️</p><small>© <span id="year"></span> CampusBite</small></footer>
+<div class="mobileNav"><button onclick="document.querySelector('#products').scrollIntoView({behavior:'smooth'})">🏠<small>Shop</small></button><button onclick="document.querySelector('#categories').scrollIntoView({behavior:'smooth'})">🧃<small>Categories</small></button><button onclick="orders()">📦<small>Orders</small></button><button onclick="cartOpen()">🛒<small>Cart</small></button></div>
+<div id="shade" onclick="if(event.target.id==='shade')closeDrawer()"><aside id="drawer"></aside></div><div id="toast"></div>
+<script>document.getElementById('year').textContent=new Date().getFullYear()</script><script src="/app.js"></script>
+</body></html>

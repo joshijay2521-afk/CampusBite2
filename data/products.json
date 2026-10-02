@@ -1,0 +1,167 @@
+[
+  {
+    "id": "p1",
+    "name": "Parle-G",
+    "category": "Biscuits",
+    "price": 10,
+    "mrp": 10,
+    "stock": 30,
+    "unit": "1 pack",
+    "emoji": "🍪",
+    "active": true
+  },
+  {
+    "id": "p2",
+    "name": "Oreo Original",
+    "category": "Biscuits",
+    "price": 30,
+    "mrp": 35,
+    "stock": 25,
+    "unit": "1 pack",
+    "emoji": "🍪",
+    "active": true
+  },
+  {
+    "id": "p3",
+    "name": "Lay's Magic Masala",
+    "category": "Chips",
+    "price": 20,
+    "mrp": 20,
+    "stock": 35,
+    "unit": "1 pack",
+    "emoji": "🥔",
+    "active": true
+  },
+  {
+    "id": "p4",
+    "name": "Kurkure Masala Munch",
+    "category": "Chips",
+    "price": 20,
+    "mrp": 20,
+    "stock": 30,
+    "unit": "1 pack",
+    "emoji": "🌶️",
+    "active": true
+  },
+  {
+    "id": "p5",
+    "name": "Dairy Milk",
+    "category": "Chocolates",
+    "price": 40,
+    "mrp": 45,
+    "stock": 20,
+    "unit": "1 bar",
+    "emoji": "🍫",
+    "active": true
+  },
+  {
+    "id": "p6",
+    "name": "5 Star",
+    "category": "Chocolates",
+    "price": 20,
+    "mrp": 20,
+    "stock": 25,
+    "unit": "1 bar",
+    "emoji": "🍫",
+    "active": true
+  },
+  {
+    "id": "p7",
+    "name": "Real Fruit Juice",
+    "category": "Drinks",
+    "price": 35,
+    "mrp": 40,
+    "stock": 18,
+    "unit": "1 pack",
+    "emoji": "🧃",
+    "active": true
+  },
+  {
+    "id": "p8",
+    "name": "Packaged Water",
+    "category": "Drinks",
+    "price": 20,
+    "mrp": 20,
+    "stock": 40,
+    "unit": "1 bottle",
+    "emoji": "💧",
+    "active": true
+  },
+  {
+    "id": "p9",
+    "name": "Kurkure Chilli Chatka",
+    "category": "Chips",
+    "price": 20,
+    "mrp": 20,
+    "stock": 25,
+    "unit": "1 pack",
+    "emoji": "🌶️",
+    "active": true
+  },
+  {
+    "id": "p10",
+    "name": "Uncle Chipps",
+    "category": "Chips",
+    "price": 20,
+    "mrp": 20,
+    "stock": 25,
+    "unit": "1 pack",
+    "emoji": "🥔",
+    "active": true
+  },
+  {
+    "id": "p11",
+    "name": "KitKat",
+    "category": "Chocolates",
+    "price": 30,
+    "mrp": 35,
+    "stock": 18,
+    "unit": "1 bar",
+    "emoji": "🍫",
+    "active": true
+  },
+  {
+    "id": "p13",
+    "name": "Maaza",
+    "category": "Drinks",
+    "price": 20,
+    "mrp": 20,
+    "stock": 22,
+    "unit": "1 bottle",
+    "emoji": "🥭",
+    "active": true
+  },
+  {
+    "id": "p14",
+    "name": "Coca-Cola",
+    "category": "Drinks",
+    "price": 40,
+    "mrp": 40,
+    "stock": 20,
+    "unit": "1 bottle",
+    "emoji": "🥤",
+    "active": true
+  },
+  {
+    "id": "p15",
+    "name": "Notebook",
+    "category": "Stationery",
+    "price": 45,
+    "mrp": 50,
+    "stock": 15,
+    "unit": "1 notebook",
+    "emoji": "📓",
+    "active": true
+  },
+  {
+    "id": "p16",
+    "name": "Blue Ball Pen",
+    "category": "Stationery",
+    "price": 10,
+    "mrp": 10,
+    "stock": 40,
+    "unit": "1 pen",
+    "emoji": "🖊️",
+    "active": true
+  }
+]

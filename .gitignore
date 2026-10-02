@@ -1,0 +1,6 @@
+node_modules/
+.campusbite-port
+*.log
+.env
+.env.*
+!.env.example
