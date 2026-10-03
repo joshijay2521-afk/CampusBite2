@@ -1,61 +1,100 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
-title CampusBite GitHub Upload - V3
+title CampusBite - Safe GitHub Upload
 
 echo.
 echo =====================================================
-echo        CAMPUSBITE - GITHUB UPLOAD V3
-echo =====================================================
+echo       CAMPUSBITE - SAFE GITHUB UPLOAD
+ echo =====================================================
 echo.
 
 where git >nul 2>&1
 if errorlevel 1 (
-  echo Git is not installed.
+  echo Git is not installed. Install Git, then run this file again.
   pause
   exit /b 1
 )
 
-echo [1/5] Preparing Git...
-if not exist ".git" git init
-if errorlevel 1 goto FAIL
+set "REMOTE=https://github.com/joshijay2521-afk/CampusBite2.git"
 
-git branch -M main
-git remote set-url origin https://github.com/joshijay2521-afk/CampusBite.git >nul 2>&1
-if errorlevel 1 git remote add origin https://github.com/joshijay2521-afk/CampusBite.git
-
-echo [2/5] Adding all CampusBite files...
-git add .
-if errorlevel 1 goto FAIL
-
-echo [3/5] Creating commit...
-git -c user.name="Jay Joshi" -c user.email="joshijay2521-afk@users.noreply.github.com" commit -m "CampusBite final hosting ready"
-if errorlevel 1 (
-  git diff --cached --quiet
+echo [1/6] Checking Git repository...
+if not exist ".git" (
+  git init
   if errorlevel 1 goto FAIL
-  echo Nothing new to commit.
+)
+git branch -M main
+if errorlevel 1 goto FAIL
+
+git remote get-url origin >nul 2>&1
+if errorlevel 1 (
+  git remote add origin "%REMOTE%"
+) else (
+  git remote set-url origin "%REMOTE%"
+)
+if errorlevel 1 goto FAIL
+
+echo [2/6] Checking GitHub main branch...
+git fetch origin main
+if errorlevel 1 goto AUTHFAIL
+
+rem Keep the final local project files, but align Git history with the existing
+rem GitHub main branch so a normal push is possible without force-pushing.
+echo [3/6] Aligning local Git history with GitHub...
+git reset --mixed origin/main
+if errorlevel 1 goto FAIL
+
+echo [4/6] Protecting secrets and staging final project...
+git add -A
+if errorlevel 1 goto FAIL
+
+git diff --cached --name-only | findstr /i /r "^\.env$ ^\.env\." >nul
+if not errorlevel 1 (
+  echo ERROR: A .env secret file is staged. Upload stopped for safety.
+  git reset
+  goto FAIL
 )
 
-echo [4/5] Uploading to GitHub...
+echo [5/6] Creating final commit...
+git -c user.name="Jay Joshi" -c user.email="joshijay2521-afk@users.noreply.github.com" commit -m "CampusBite final performance and admin fixes"
+if errorlevel 1 (
+  git diff --cached --quiet
+  if not errorlevel 1 (
+    echo No file changes were detected. GitHub may already have this version.
+  ) else (
+    goto FAIL
+  )
+)
+
+echo [6/6] Uploading to GitHub...
 git push -u origin main
 if errorlevel 1 goto PUSHFAIL
 
 echo.
 echo =====================================================
-echo SUCCESS! CAMPUSBITE IS NOW ON GITHUB.
-echo https://github.com/joshijay2521-afk/CampusBite
-echo =====================================================
+echo SUCCESS - CAMPUSBITE UPLOADED TO GITHUB
+ echo Repository: https://github.com/joshijay2521-afk/CampusBite2
+ echo =====================================================
 echo.
 pause
 exit /b 0
 
+:AUTHFAIL
+echo.
+echo =====================================================
+echo GITHUB LOGIN/AUTHORIZATION IS REQUIRED.
+echo Your local project files have NOT been deleted.
+echo Sign in to GitHub if Windows asks, then run this file again.
+echo =====================================================
+pause
+exit /b 1
+
 :PUSHFAIL
 echo.
 echo =====================================================
-echo UPLOAD STOPPED AT GITHUB LOGIN/PERMISSION.
-echo Your local files and commit are safe.
-echo Complete GitHub sign-in if requested, then run
-echo this same file once more.
+echo GITHUB PUSH FAILED.
+echo DO NOT DELETE THIS FOLDER.
+echo Your local project files and commit are safe.
 echo =====================================================
 pause
 exit /b 1
@@ -63,8 +102,8 @@ exit /b 1
 :FAIL
 echo.
 echo =====================================================
-echo SOMETHING STOPPED THE GIT UPLOAD.
-echo Do not delete the CampusBite folder.
+echo UPLOAD STOPPED TO PROTECT YOUR PROJECT.
+echo DO NOT DELETE THIS FOLDER.
 echo =====================================================
 pause
 exit /b 1

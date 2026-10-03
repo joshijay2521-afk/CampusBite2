@@ -20,3 +20,5 @@ body{background:linear-gradient(180deg,#fff9f2,#f5f8ff)}
 .chatListItem:hover{background:#fff6ed;border-color:#ffc58c}.chatInput button{background:linear-gradient(90deg,#ff641b,#ff9e18)}
 #adminToast{background:linear-gradient(90deg,#171717,#343434);box-shadow:0 10px 30px rgba(0,0,0,.2)}
 .couponRow{display:flex;justify-content:space-between;align-items:center;gap:15px;border:1px solid #eee;border-radius:12px;padding:13px;margin:9px 0;background:#fafafa}.couponRow .actions{flex-wrap:wrap}@media(max-width:800px){.stats,.grid2{grid-template-columns:1fr 1fr}.couponRow{align-items:flex-start;flex-direction:column}.bar span{display:none}}@media(max-width:560px){.stats,.grid2{grid-template-columns:1fr}.wrap{padding:0 10px}.table{font-size:11px;display:block;overflow:auto}.couponRow .actions{width:100%}}
+
+.dangerBtn{margin-left:6px;border:1px solid #c33;background:#fff5f5;color:#b42318}.dangerBtn:hover{background:#fee4e2}.actions{display:flex;gap:6px;flex-wrap:wrap}

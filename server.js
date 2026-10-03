@@ -10,6 +10,11 @@ const PORT = Number(process.env.PORT) || 3001;
 const MAX_BODY = 4 * 1024 * 1024;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+const CORS_ORIGIN = String(process.env.CORS_ORIGIN || '*').trim() || '*';
+const PRODUCT_CACHE_TTL = 15 * 1000;
+const SETTINGS_CACHE_TTL = 10 * 1000;
+let productCache = null;
+let settingsCache = null;
 
 const files = {
   products: path.join(DATA, 'products.json'),
@@ -19,7 +24,7 @@ const files = {
 };
 
 const BOOTSTRAP_ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const BOOTSTRAP_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'CampusBite@2026!';
+const BOOTSTRAP_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '').trim();
 const DEFAULT_SETTINGS = {
   admin: { username: BOOTSTRAP_ADMIN_USERNAME, password: BOOTSTRAP_ADMIN_PASSWORD },
   commerce: { deliveryEnabled: true, deliveryFee: 20, freeDeliveryThreshold: 199, coupons: [] },
@@ -28,7 +33,7 @@ const DEFAULT_SETTINGS = {
     eyebrow: '⚡ QUICK CAMPUS DELIVERY',
     title: 'Your cravings.\nCampus delivered.',
     subtitle: 'Biscuits, chips, chocolates, drinks & everyday student essentials — just a few taps away.',
-    buttonText: 'Shop now →'
+    buttonText: 'Shop now →', imageVersion: ''
   }
 };
 
@@ -72,6 +77,7 @@ function normalizeSettings(s) {
   out.commerce.coupons = Array.isArray(out.commerce.coupons) ? out.commerce.coupons : [];
   out.commerce.coupons = out.commerce.coupons.map(c => ({...c, code: String(c.code||'').trim().toUpperCase(), type: c.type === 'fixed' ? 'fixed' : 'percent', value: Math.max(0, safeNumber(c.value,0,1000000)), minOrder: Math.max(0,safeNumber(c.minOrder,0,10000000)), maxDiscount: Math.max(0,safeNumber(c.maxDiscount,0,10000000)), usageLimit: Math.max(0,Math.floor(safeNumber(c.usageLimit,0,10000000))), usedCount: Math.max(0,Math.floor(safeNumber(c.usedCount,0,10000000))), active: c.active !== false, expiresAt: c.expiresAt ? String(c.expiresAt) : ''})).filter(c=>c.code);
   out.banner = { ...DEFAULT_SETTINGS.banner, ...(s?.banner || {}) };
+  if (out.banner.image && !out.banner.imageVersion) out.banner.imageVersion = crypto.createHash('sha1').update(String(out.banner.image)).digest('hex').slice(0, 16);
   out.admin = { ...DEFAULT_SETTINGS.admin, ...(s?.admin || {}) };
   if (out.admin.password && !String(out.admin.password).startsWith('scrypt:')) out.admin.password = hashPassword(out.admin.password);
   return out;
@@ -80,7 +86,11 @@ function normalizeSettings(s) {
 async function initStore() {
   if (!DATABASE_URL) {
     ensureLocalFiles();
-    const s = normalizeSettings(readJson(files.settings));
+    const raw = readJson(files.settings);
+    const s = normalizeSettings(raw);
+    if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && !s.admin?.bootstrapMigrated) {
+      s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+    }
     writeJson(files.settings, s);
     console.log('Storage: local JSON files');
     return;
@@ -111,6 +121,9 @@ async function initStore() {
         id integer PRIMARY KEY,
         data jsonb NOT NULL
       )`;
+    await sql`CREATE INDEX IF NOT EXISTS cb_orders_phone_idx ON cb_orders ((regexp_replace(COALESCE(data->'customer'->>'phone',''), '[^0-9]', '', 'g')))`;
+    await sql`CREATE INDEX IF NOT EXISTS cb_chats_order_id_idx ON cb_chats (order_id)`;
+    await sql`CREATE INDEX IF NOT EXISTS cb_orders_created_at_idx ON cb_orders (created_at DESC)`;
     const [{ count: pc }] = await sql`SELECT count(*)::int AS count FROM cb_products`;
     if (pc === 0) {
       ensureLocalFiles();
@@ -134,8 +147,16 @@ async function initStore() {
     } else {
       const rows = await sql`SELECT data FROM cb_settings WHERE id=1`;
       if (rows[0]) {
-        const s = normalizeSettings(rows[0].data);
-        if (JSON.stringify(s) !== JSON.stringify(rows[0].data)) await sql`UPDATE cb_settings SET data=${sql.json(s)} WHERE id=1`;
+        const raw = rows[0].data || {};
+        const s = normalizeSettings(raw);
+        // One-time admin bootstrap from Render environment variables.
+        // It does not overwrite later changes made in Admin -> Security.
+        if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && !s.admin?.bootstrapMigrated) {
+          s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+          await sql`UPDATE cb_settings SET data=${sql.json(s)} WHERE id=1`;
+        } else if (JSON.stringify(s) !== JSON.stringify(raw)) {
+          await sql`UPDATE cb_settings SET data=${sql.json(s)} WHERE id=1`;
+        }
       }
     }
     console.log('Storage: PostgreSQL database');
@@ -145,11 +166,15 @@ async function initStore() {
   }
 }
 
-async function getProducts() {
-  if (!sql) return readJson(files.products);
-  return (await sql`SELECT data FROM cb_products ORDER BY id`).map(r => r.data);
+async function getProducts(options = {}) {
+  const fresh = options.fresh === true;
+  if (!fresh && productCache && productCache.expiresAt > Date.now()) return clone(productCache.value);
+  const products = !sql ? readJson(files.products) : (await sql`SELECT data FROM cb_products ORDER BY id`).map(r => r.data);
+  productCache = { value: clone(products), expiresAt: Date.now() + PRODUCT_CACHE_TTL };
+  return products;
 }
 async function saveProducts(products) {
+  productCache = null;
   if (!sql) return writeJson(files.products, products);
   await sql.begin(async tx => {
     for (const p of products) await tx`INSERT INTO cb_products (id,data) VALUES (${p.id},${tx.json(p)}) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`;
@@ -175,25 +200,48 @@ async function saveChat(message) {
   if (!sql) { const chats = readJson(files.chats); chats.push(message); return writeJson(files.chats, chats); }
   await sql`INSERT INTO cb_chats (id,order_id,data,at) VALUES (${message.id},${message.orderId},${sql.json(message)},${message.at})`;
 }
-async function getSettings() {
-  if (!sql) return normalizeSettings(readJson(files.settings));
-  const rows = await sql`SELECT data FROM cb_settings WHERE id=1`;
-  return normalizeSettings(rows[0]?.data || DEFAULT_SETTINGS);
+async function getSettings(options = {}) {
+  const fresh = options.fresh === true;
+  if (!fresh && settingsCache && settingsCache.expiresAt > Date.now()) return clone(settingsCache.value);
+  const settings = !sql ? normalizeSettings(readJson(files.settings)) : normalizeSettings((await sql`SELECT data FROM cb_settings WHERE id=1`)[0]?.data || DEFAULT_SETTINGS);
+  settingsCache = { value: clone(settings), expiresAt: Date.now() + SETTINGS_CACHE_TTL };
+  return settings;
 }
 function publicSettings(settings) {
   const out = clone(normalizeSettings(settings));
   delete out.admin;
+  if (out.banner?.image) {
+    out.banner.imageUrl = `/api/banner?v=${encodeURIComponent(out.banner.imageVersion || '')}`;
+    delete out.banner.image;
+  } else if (out.banner) {
+    out.banner.imageUrl = '';
+    delete out.banner.image;
+  }
   return out;
+}
+
+async function getBannerAsset() {
+  const s = await getSettings();
+  const image = String(s.banner?.image || '');
+  const match = image.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!match) return null;
+  return { type: match[1], body: Buffer.from(match[2], 'base64'), version: s.banner.imageVersion || '' };
 }
 
 async function saveSettings(settings) {
   settings = normalizeSettings(settings);
+  settingsCache = null;
   if (!sql) return writeJson(files.settings, settings);
   await sql`INSERT INTO cb_settings (id,data) VALUES (1,${sql.json(settings)}) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`;
 }
 
 function cleanPhone(x) { return String(x || '').replace(/\D/g, ''); }
 function nextOrderId(os) { const max = os.reduce((m, o) => Math.max(m, Number(String(o.id || '').replace(/\D/g, '')) || 1000), 1000); return 'CB-' + String(max + 1).padStart(4, '0'); }
+async function nextOrderIdFromStore() {
+  if (!sql) return nextOrderId(await getOrders());
+  const rows = await sql`SELECT COALESCE(MAX(NULLIF(regexp_replace(id, '[^0-9]', '', 'g'), '')::int), 1000) AS max_id FROM cb_orders`;
+  return 'CB-' + String(Number(rows[0]?.max_id || 1000) + 1).padStart(4, '0');
+}
 function addTimeline(o, status, extra = {}) { const now = new Date().toISOString(); o.status = status; o.timeline = o.timeline || []; o.timeline.push({ status, at: now, ...extra }); o.updatedAt = now; if (status === 'Delivered') o.deliveredAt = now; if (status === 'Cancelled') o.cancelledAt = now; }
 function tokenFrom(req) { return String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''); }
 function isAuthed(req) {
@@ -215,7 +263,7 @@ function rateLimit(key, limit, windowMs) {
 function json(res, status, data) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin'
+    'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', 'Access-Control-Allow-Origin': CORS_ORIGIN, 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS'
   });
   res.end(JSON.stringify(data));
 }
@@ -229,7 +277,7 @@ function readBody(req) {
 }
 function staticFile(res, file) {
   const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon' };
-  res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': (path.extname(file) === '.html' ? 'no-cache' : 'public, max-age=86400, stale-while-revalidate=604800'), 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': CORS_ORIGIN });
   fs.createReadStream(file).pipe(res);
 }
 function safeText(x, max = 500) { return String(x ?? '').trim().slice(0, max); }
@@ -253,6 +301,7 @@ async function handle(req, res) {
   try {
     const u = new URL(req.url, 'http://localhost');
     const p = u.pathname, m = req.method;
+    if (m === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': CORS_ORIGIN, 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS', 'Access-Control-Max-Age': '86400' }); return res.end(); }
     if (m === 'GET' && p === '/api/health') return json(res, 200, { ok: true, service: 'CampusBite', storage: sql ? 'postgres' : 'local-json', uptimeSeconds: Math.floor(process.uptime()), node: process.version });
 
     if (m === 'GET' && p === '/api/products') {
@@ -265,12 +314,25 @@ async function handle(req, res) {
       return json(res, 200, products);
     }
     if (m === 'GET' && p === '/api/settings') return json(res, 200, publicSettings(await getSettings()));
+    if (m === 'GET' && p === '/api/banner') { const asset = await getBannerAsset(); if (!asset) return json(res, 404, { error: 'Banner image not configured' }); res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400', 'ETag': `"${asset.version}"`, 'Access-Control-Allow-Origin': CORS_ORIGIN }); return res.end(asset.body); }
     if (m === 'POST' && p === '/api/coupons/validate') { const b=await readBody(req), s=await getSettings(), subtotal=Math.max(0,safeNumber(b.subtotal,0,10000000)), r=getCommerceCoupon(s,b.code,subtotal); return r.error ? json(res,400,{error:r.error}) : json(res,200,{code:r.coupon.code,discount:r.discount,type:r.coupon.type,value:r.coupon.value}); }
 
     if (m === 'POST' && p === '/api/admin/login') {
       if (!rateLimit('login:' + clientIp(req), 8, 10 * 60 * 1000)) return json(res, 429, { error: 'Too many login attempts. Please try again later.' });
       const b = await readBody(req), s = await getSettings(), a = s.admin || DEFAULT_SETTINGS.admin;
-      if (safeText(b.username, 100) === a.username && verifyPassword(String(b.password || ''), a.password)) {
+      const enteredUser = safeText(b.username, 100);
+      const enteredPass = String(b.password || '');
+      let valid = enteredUser === a.username && verifyPassword(enteredPass, a.password);
+      // One-time recovery: if bootstrapMigrated is false, Render credentials can
+      // safely repair the existing Supabase admin record. After syncing, the
+      // database hash becomes the normal source of truth again.
+      if (!valid && BOOTSTRAP_ADMIN_PASSWORD && enteredUser === BOOTSTRAP_ADMIN_USERNAME &&
+          enteredPass === BOOTSTRAP_ADMIN_PASSWORD && !a.bootstrapMigrated) {
+        s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+        await saveSettings(s);
+        valid = true;
+      }
+      if (valid) {
         loginAttempts.delete('login:' + clientIp(req));
         const t = crypto.randomBytes(32).toString('hex'); sessions.set(t, Date.now() + SESSION_TTL); return json(res, 200, { token: t, expiresIn: SESSION_TTL });
       }
@@ -282,18 +344,20 @@ async function handle(req, res) {
 
     if (m === 'GET' && p === '/api/orders/history') {
       const phone = cleanPhone(u.searchParams.get('phone')); if (phone.length < 10) return json(res, 400, { error: 'Enter the mobile number used for the order' });
-      const orders = (await getOrders()).filter(x => cleanPhone(x.customer?.phone) === phone).map(x => ({ ...x, customer: { ...x.customer, phone: '******' + cleanPhone(x.customer.phone).slice(-4) } }));
+      const rows = sql ? await sql`SELECT data FROM cb_orders WHERE regexp_replace(COALESCE(data->'customer'->>'phone',''), '[^0-9]', '', 'g') = ${phone} ORDER BY created_at DESC` : (await getOrders()).filter(x => cleanPhone(x.customer?.phone) === phone).map(x => ({ data: x }));
+      const orders = rows.map(r => { const x = r.data; return { ...x, customer: { ...x.customer, phone: '******' + cleanPhone(x.customer?.phone).slice(-4) } }; });
       return json(res, 200, { orders });
     }
     if (m === 'GET' && p === '/api/orders/track') {
       const id = safeText(u.searchParams.get('id'), 40), phone = cleanPhone(u.searchParams.get('phone'));
-      const o = (await getOrders()).find(x => x.id === id && cleanPhone(x.customer?.phone) === phone);
+      const rows = sql ? await sql`SELECT data FROM cb_orders WHERE id=${id} AND regexp_replace(COALESCE(data->'customer'->>'phone',''), '[^0-9]', '', 'g') = ${phone} LIMIT 1` : [];
+      const o = sql ? rows[0]?.data : (await getOrders()).find(x => x.id === id && cleanPhone(x.customer?.phone) === phone);
       return o ? json(res, 200, { order: o }) : json(res, 404, { error: 'Order not found' });
     }
 
     if (m === 'POST' && p === '/api/orders') {
       if (!rateLimit('order:' + clientIp(req), 20, 10 * 60 * 1000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
-      const b = await readBody(req), ps = await getProducts(), os = await getOrders();
+      const b = await readBody(req), ps = await getProducts({fresh:true}), os = sql ? null : await getOrders();
       if (!b.customer?.name || !b.customer?.phone || !b.customer?.location || !Array.isArray(b.items) || !b.items.length) return json(res, 400, { error: 'Please fill all required details' });
       const phone = cleanPhone(b.customer.phone); if (phone.length < 10 || phone.length > 15) return json(res, 400, { error: 'Enter a valid mobile number' });
       const items = []; let sub = 0;
@@ -314,7 +378,7 @@ async function handle(req, res) {
         const prod = ps.find(z => z.id === item.productId);
         if (prod) prod.stock -= item.qty;
       }
-      const total = Math.max(0, sub + delivery - discount), id = nextOrderId(os), now = new Date(), eta = new Date(now.getTime() + 30 * 60000).toISOString();
+      const total = Math.max(0, sub + delivery - discount), id = await nextOrderIdFromStore(), now = new Date(), eta = new Date(now.getTime() + 30 * 60000).toISOString();
       if (couponResult.coupon) { const used = settings.commerce.coupons.find(x => x.code === couponResult.coupon.code); if (used) used.usedCount = (used.usedCount || 0) + 1; }
       const o = { id, createdAt: now.toISOString(), updatedAt: now.toISOString(), estimatedDeliveryAt: eta, status: 'New', payment: 'Cash on Delivery', customer: { name: safeText(b.customer.name, 100), phone: safeText(b.customer.phone, 20), location: safeText(b.customer.location, 200) }, items, subtotal: sub, delivery, coupon: couponResult.coupon?.code || '', discount, total, note: safeText(b.note, 500), timeline: [{ status: 'New', at: now.toISOString() }] };
       await saveProducts(ps); await saveSettings(settings); await saveOrder(o); return json(res, 201, { order: o });
@@ -322,8 +386,9 @@ async function handle(req, res) {
 
     if (m === 'GET' && p === '/api/chat') {
       const id = safeText(u.searchParams.get('orderId'), 40), phone = cleanPhone(u.searchParams.get('phone'));
-      const o = (await getOrders()).find(x => x.id === id && cleanPhone(x.customer?.phone) === phone); if (!o) return json(res, 404, { error: 'Order not found' });
-      return json(res, 200, { orderId: id, messages: (await getChats()).filter(x => x.orderId === id) });
+      const o = sql ? (await sql`SELECT data FROM cb_orders WHERE id=${id} AND regexp_replace(COALESCE(data->'customer'->>'phone',''), '[^0-9]', '', 'g') = ${phone} LIMIT 1`)[0]?.data : (await getOrders()).find(x => x.id === id && cleanPhone(x.customer?.phone) === phone); if (!o) return json(res, 404, { error: 'Order not found' });
+      const messages = sql ? (await sql`SELECT data FROM cb_chats WHERE order_id=${id} ORDER BY at ASC`).map(r => r.data) : (await getChats()).filter(x => x.orderId === id);
+      return json(res, 200, { orderId: id, messages });
     }
     if (m === 'POST' && p === '/api/chat') {
       const b = await readBody(req), id = safeText(b.orderId, 40), phone = cleanPhone(b.phone), text = safeText(b.text, 1000);
@@ -343,6 +408,25 @@ async function handle(req, res) {
       const o = (await getOrders()).find(x => x.id === id); if (!o) return json(res, 404, { error: 'Order not found' });
       const msg = { id: 'm' + Date.now() + crypto.randomBytes(4).toString('hex'), orderId: id, sender: 'admin', text, at: new Date().toISOString() }; await saveChat(msg); return json(res, 201, { message: msg });
     }
+    if (m === 'DELETE' && p.startsWith('/api/admin/orders/')) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = safeText(p.split('/').pop(), 40);
+      if (!id) return json(res, 400, { error: 'Order id is required' });
+      const existingOrders = await getOrders();
+      const existingOrder = existingOrders.find(x => x.id === id);
+      if (!existingOrder) return json(res, 404, { error: 'Order not found' });
+      if (!['Delivered', 'Cancelled'].includes(existingOrder.status)) return json(res, 400, { error: 'Only Delivered or Cancelled orders can be permanently deleted' });
+      if (!sql) {
+        const orders = readJson(files.orders);
+        const next = orders.filter(x => x.id !== id);
+        if (next.length === orders.length) return json(res, 404, { error: 'Order not found' });
+        writeJson(files.orders, next);
+        return json(res, 200, { deleted: true, id });
+      }
+      const deleted = await sql`DELETE FROM cb_orders WHERE id=${id} RETURNING id`;
+      if (!deleted.length) return json(res, 404, { error: 'Order not found' });
+      return json(res, 200, { deleted: true, id });
+    }
     if (m === 'PATCH' && p.startsWith('/api/admin/orders/')) {
       if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
       const b = await readBody(req), id = safeText(p.split('/').pop(), 40), os = await getOrders(), o = os.find(x => x.id === id); if (!o) return json(res, 404, { error: 'Order not found' });
@@ -361,7 +445,7 @@ async function handle(req, res) {
           s.commerce.coupons = c.coupons.map(x => ({...x, code: safeText(x.code,40).toUpperCase(), type: x.type === 'fixed' ? 'fixed' : 'percent', value: safeNumber(x.value,0,1000000), minOrder: safeNumber(x.minOrder,0,10000000), maxDiscount: safeNumber(x.maxDiscount,0,10000000), usageLimit: Math.floor(safeNumber(x.usageLimit,0,10000000)), usedCount: Math.floor(safeNumber(existing.get(String(x.code||'').toUpperCase())?.usedCount || x.usedCount,0,10000000)), active: x.active !== false, expiresAt: safeText(x.expiresAt || '',40)})).filter(x=>x.code && x.value > 0);
         }
       }
-      if (b.banner) { s.banner = { ...s.banner, ...b.banner }; for (const k of ['image', 'eyebrow', 'title', 'subtitle', 'buttonText']) if (s.banner[k] !== undefined) s.banner[k] = safeText(s.banner[k], k === 'image' ? 2200000 : 5000); if (s.banner.showText !== undefined) s.banner.showText = !!s.banner.showText; }
+      if (b.banner) { s.banner = { ...s.banner, ...b.banner }; if (b.banner.image !== undefined) s.banner.imageVersion = crypto.createHash('sha1').update(String(s.banner.image || '')).digest('hex').slice(0, 16); for (const k of ['image', 'eyebrow', 'title', 'subtitle', 'buttonText']) if (s.banner[k] !== undefined) s.banner[k] = safeText(s.banner[k], k === 'image' ? 2200000 : 5000); if (s.banner.showText !== undefined) s.banner.showText = !!s.banner.showText; }
       if (b.admin) {
         const current = s.admin || DEFAULT_SETTINGS.admin;
         if (safeText(b.admin.currentUsername, 100) !== current.username || !verifyPassword(String(b.admin.currentPassword || ''), current.password)) return json(res, 400, { error: 'Current admin username or password is incorrect' });
@@ -369,6 +453,22 @@ async function handle(req, res) {
         s.admin = { username: nu, password: hashPassword(np) }; await saveSettings(s); sessions.clear(); return json(res, 200, { changed: true });
       }
       await saveSettings(s); return json(res, 200, s);
+    }
+    if (m === 'DELETE' && p.startsWith('/api/admin/products/')) {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const id = safeText(p.split('/').pop(), 80);
+      if (!id) return json(res, 400, { error: 'Product id is required' });
+      if (!sql) {
+        const products = readJson(files.products);
+        const next = products.filter(x => x.id !== id);
+        if (next.length === products.length) return json(res, 404, { error: 'Product not found' });
+        writeJson(files.products, next); productCache = null;
+        return json(res, 200, { deleted: true, id });
+      }
+      const deleted = await sql`DELETE FROM cb_products WHERE id=${id} RETURNING id`;
+      if (!deleted.length) return json(res, 404, { error: 'Product not found' });
+      productCache = null;
+      return json(res, 200, { deleted: true, id });
     }
     if (m === 'PATCH' && p.startsWith('/api/admin/products/')) {
       if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });

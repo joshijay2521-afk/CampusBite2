@@ -119,3 +119,11 @@ BOOTSTRAP ADMIN (change after first login)
 Username: admin
 Password: CampusBite@2026!
 Use Admin → Admin Login to change these credentials after deployment.
+
+
+FINAL V4 NOTES
+- Existing Supabase database/data is preserved.
+- Admin recovery uses ADMIN_USERNAME/ADMIN_PASSWORD only when bootstrapMigrated is false, then stores a password hash in the database.
+- Permanent order deletion is allowed only for Delivered or Cancelled orders, enforced on the server.
+- Permanent product deletion is admin-authenticated.
+- Netlify requires the real Render service hostname in netlify.toml before deployment.

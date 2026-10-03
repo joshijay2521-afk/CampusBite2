@@ -1,0 +1,9 @@
+CampusBite final split deployment
+
+1. Render keeps the Node backend and Supabase connection.
+2. Netlify publishes only the public folder.
+3. netlify.toml contains a placeholder for the existing Render service URL. Before Netlify deployment, replace YOUR-RENDER-SERVICE with the exact hostname of your existing Render service. Do not add /api to the hostname in the value; the rule already adds /api/:splat.
+4. Do not put DATABASE_URL, Supabase service-role keys, passwords, or .env files in GitHub.
+5. Existing Supabase data is preserved; no database reset or migration is included.
+6. Permanent order deletion is restricted server-side to Delivered or Cancelled orders.
+7. Product permanent deletion is admin-authenticated.
