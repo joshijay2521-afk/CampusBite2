@@ -1,9 +1,105 @@
-let t=localStorage.cb_admin,$=x=>document.querySelector(x),activeTab='orders',orderFilter='All';
-async function api(u,o={}){o.headers={...(o.headers||{}),Authorization:'Bearer '+t};let r=await fetch(u,o),d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
+let t=localStorage.cb_admin,$=x=>document.querySelector(x),activeTab='orders',orderFilter='All',orderWatchTimer=null,orderWatchCursor=null,notifying=false;
+async function api(u,o={}){o.headers={...(o.headers||{}),Authorization:'Bearer '+t};let r=await fetch(u,o),d={};try{d=await r.json()}catch(_){}if(!r.ok){const e=Error(d.error||('Request failed ('+r.status+')'));e.status=r.status;throw e}return d}
 function login(){app.innerHTML=`<div class="login"><b>🍔 CampusBite</b><h1>Admin login</h1><p class="muted">Manage orders, customers, tracking, chat and stock.</p><div class="field"><label>USERNAME</label><input id="u" autocomplete="username"></div><div class="field"><label>PASSWORD</label><input id="p" type="password" autocomplete="current-password"></div><button class="btn dark" style="width:100%" onclick="go()">Login</button><p id="e" class="muted"></p></div>`}
-async function go(){try{let r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u.value,password:p.value})}),d=await r.json();if(!r.ok)throw Error(d.error);t=d.token;localStorage.cb_admin=t;dash()}catch(e){$('#e').textContent=e.message}}
-async function dash(tab=activeTab){activeTab=tab;try{let [o,p,c,settings]=await Promise.all([api('/api/admin/orders'),api('/api/admin/products'),api('/api/admin/chats'),api('/api/settings')]);window.os=o.orders;window.ps=p.products;window.chats=c.chats;window.settings=settings;let rev=os.filter(x=>x.status!=='Cancelled').reduce((a,x)=>a+x.total,0),unread=chats.reduce((n,c)=>n+(c.messages||[]).filter(m=>m.sender==='user').length,0);app.innerHTML=`<div class="bar"><b>🍔 CampusBite Admin</b><span>Live operations dashboard</span><button class="btn" onclick="refresh()">↻ Refresh</button><button class="btn" onclick="logout()">Logout</button></div><div class="wrap"><div class="stats"><div class="stat"><small>NEW ORDERS</small><b>${os.filter(x=>x.status==='New').length}</b></div><div class="stat"><small>ACTIVE</small><b>${os.filter(x=>!['Delivered','Cancelled'].includes(x.status)).length}</b></div><div class="stat"><small>DELIVERED</small><b>${os.filter(x=>x.status==='Delivered').length}</b></div><div class="stat"><small>REVENUE</small><b>₹${rev}</b></div></div><div class="tabs"><button class="tab ${activeTab==='orders'?'active':''}" onclick="dash('orders')">📦 Orders</button><button class="tab ${activeTab==='products'?'active':''}" onclick="dash('products')">🛍️ Products & Stock</button><button class="tab ${activeTab==='chats'?'active':''}" onclick="dash('chats')">💬 Customer Chat ${unread?`(${unread})`:''}</button><button class="tab ${activeTab==='offers'?'active':''}" onclick="dash('offers')">💸 Offers & Delivery</button><button class="tab ${activeTab==='store'?'active':''}" onclick="dash('store')">🎨 Storefront</button><button class="tab ${activeTab==='security'?'active':''}" onclick="dash('security')">🔐 Admin Login</button></div>${activeTab==='orders'?orders():activeTab==='products'?products():activeTab==='chats'?chatPanel():activeTab==='offers'?offers():activeTab==='store'?storeSettings():securitySettings()}</div>`;if(activeTab==='chats')openFirstChat();}catch(e){localStorage.removeItem('cb_admin');t='';login()}}
-function refresh(){dash(activeTab)}function logout(){localStorage.removeItem('cb_admin');t='';login()}
+async function go(){try{const username=$('#u').value.trim(),password=$('#p').value;let r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})}),d=await r.json();if(!r.ok)throw Error(d.error||'Login failed');t=d.token;localStorage.cb_admin=t;dash()}catch(e){$('#e').textContent=e.message||'Login failed'}}
+async function dash(tab=activeTab){activeTab=tab;try{let [o,p,c,settings]=await Promise.all([api('/api/admin/orders'),api('/api/admin/products'),api('/api/admin/chats'),api('/api/settings')]);window.os=o.orders;window.ps=p.products;window.chats=c.chats;window.settings=settings;let rev=os.filter(x=>x.status!=='Cancelled').reduce((a,x)=>a+x.total,0),unread=chats.reduce((n,c)=>n+(c.messages||[]).filter(m=>m.sender==='user').length,0);app.innerHTML=`<div class="bar"><b>🍔 CampusBite Admin</b><span>Live operations dashboard</span><button class="btn" onclick="refresh()">↻ Refresh</button><button class="btn" onclick="enableOrderNotifications()" id="notifyBtn">🔔 Notifications</button><button class="btn" onclick="logout()">Logout</button></div><div class="wrap"><div class="stats"><div class="stat"><small>NEW ORDERS</small><b>${os.filter(x=>x.status==='New').length}</b></div><div class="stat"><small>ACTIVE</small><b>${os.filter(x=>!['Delivered','Cancelled'].includes(x.status)).length}</b></div><div class="stat"><small>DELIVERED</small><b>${os.filter(x=>x.status==='Delivered').length}</b></div><div class="stat"><small>REVENUE</small><b>₹${rev}</b></div></div><div class="tabs"><button class="tab ${activeTab==='orders'?'active':''}" onclick="dash('orders')">📦 Orders</button><button class="tab ${activeTab==='products'?'active':''}" onclick="dash('products')">🛍️ Products & Stock</button><button class="tab ${activeTab==='chats'?'active':''}" onclick="dash('chats')">💬 Customer Chat ${unread?`(${unread})`:''}</button><button class="tab ${activeTab==='offers'?'active':''}" onclick="dash('offers')">💸 Offers & Delivery</button><button class="tab ${activeTab==='store'?'active':''}" onclick="dash('store')">🎨 Storefront</button><button class="tab ${activeTab==='security'?'active':''}" onclick="dash('security')">🔐 Admin Login</button></div>${activeTab==='orders'?orders():activeTab==='products'?products():activeTab==='chats'?chatPanel():activeTab==='offers'?offers():activeTab==='store'?storeSettings():securitySettings()}</div>`;if(activeTab==='chats')openFirstChat();startOrderWatcher();}catch(e){if(e&&e.status===401){localStorage.removeItem('cb_admin');t='';login();return}if(typeof toast==='function')toast('Admin data could not refresh. Please try again.');else if(app)app.innerHTML='<div class="login"><h2>Admin temporarily unavailable</h2><p class="muted">Please refresh and try again.</p><button class="btn dark" onclick="dash()">Retry</button></div>'}}
+function refresh(){dash(activeTab)}
+function stopOrderWatcher(){if(orderWatchTimer){clearInterval(orderWatchTimer);orderWatchTimer=null}notifying=false}
+
+function updateNotifyButton(){
+  const b=$('#notifyBtn');if(!b)return;
+  if(typeof Notification==='undefined'){b.textContent='🔔 Dashboard alerts ON';return}
+  if(Notification.permission==='granted')b.textContent='🔔 Notifications ON';
+  else if(Notification.permission==='denied')b.textContent='🔕 Browser blocked · dashboard alerts ON';
+  else b.textContent='🔔 Enable notifications';
+}
+function notifyNewOrder(o){
+  if(!o||!o.id||wasSeen(o.id))return;
+  markSeen(o.id);
+  const title='🍔 New CampusBite Order';
+  const body=`${o.id} · ${o.customer?.name||'Customer'} · ₹${o.total||0}`;
+  playOrderAlert();
+  try{
+    if(typeof Notification!=='undefined'&&Notification.permission==='granted'){
+      const n=new Notification(title,{body,tag:'campusbite-'+o.id,renotify:true});
+      n.onclick=()=>{window.focus();activeTab='orders';dash('orders');n.close()};
+    }
+  }catch(_){}
+  try{
+    if(typeof toast==='function')toast('🔔 NEW ORDER: '+o.id+' · ₹'+(o.total||0));
+  }catch(_){}
+  try{
+    const bar=document.createElement('div');
+    bar.setAttribute('role','alert');
+    bar.style.cssText='position:fixed;right:20px;top:20px;z-index:99999;background:#111;color:#fff;padding:18px 22px;border-radius:14px;box-shadow:0 10px 35px rgba(0,0,0,.35);font-weight:700;cursor:pointer;max-width:380px;border:2px solid #fff';
+    bar.innerHTML='🍔 NEW ORDER<br><small>'+String(o.id)+' · '+String(o.customer?.name||'Customer')+' · ₹'+String(o.total||0)+'</small>';
+    bar.onclick=()=>{bar.remove();activeTab='orders';dash('orders')};
+    document.body.appendChild(bar);
+    setTimeout(()=>bar.remove(),15000);
+  }catch(_){}
+}
+function wasSeen(id){
+  try{return JSON.parse(localStorage.getItem('cb_notified_orders')||'[]').includes(String(id))}
+  catch(_){return false}
+}
+function markSeen(id){
+  try{
+    const a=JSON.parse(localStorage.getItem('cb_notified_orders')||'[]');
+    a.push(String(id));localStorage.setItem('cb_notified_orders',JSON.stringify(a.slice(-100)));
+  }catch(_){}
+}
+async function enableOrderNotifications(){
+  try{
+    if(typeof Notification==='undefined'){updateNotifyButton();if(typeof toast==='function')toast('Browser notifications unavailable. Dashboard alerts are still active.');return}
+    const permission=await Notification.requestPermission();
+    updateNotifyButton();
+    if(permission==='granted')playOrderAlert();
+  }catch(_){}
+  startOrderWatcher();
+}
+async function pollNewOrders(){
+  if(!t||notifying)return;
+  notifying=true;
+  try{
+    const query=lastOrderSeenAt?'?after='+encodeURIComponent(lastOrderSeenAt):'';
+    const d=await api('/api/admin/orders/new'+query);
+    const fresh=(d.orders||[]).filter(o=>o&&o.id);
+    for(const o of fresh)notifyNewOrder(o);
+    if(fresh.length){
+      const times=fresh.map(o=>Date.parse(o.createdAt||'')).filter(Number.isFinite);
+      if(times.length){
+        lastOrderSeenAt=new Date(Math.max(...times)).toISOString();
+        localStorage.setItem('cb_last_order_seen_at',lastOrderSeenAt);
+      }
+    }
+  }catch(_){
+    // Keep polling alive after temporary network/server errors.
+  }finally{notifying=false}
+}
+function startOrderWatcher(){
+  if(!t||orderWatchTimer)return;
+  updateNotifyButton();
+  if(!lastOrderSeenAt){
+    const current=Array.isArray(window.os)?window.os:[];
+    const times=current.map(o=>Date.parse(o.createdAt||'')).filter(Number.isFinite);
+    if(times.length){
+      lastOrderSeenAt=new Date(Math.max(...times)).toISOString();
+      localStorage.setItem('cb_last_order_seen_at',lastOrderSeenAt);
+    }else{
+      lastOrderSeenAt=new Date().toISOString();
+      localStorage.setItem('cb_last_order_seen_at',lastOrderSeenAt);
+    }
+  }
+  orderWatchTimer=setInterval(pollNewOrders,3000);
+  setTimeout(pollNewOrders,250);
+}
+function stopOrderWatcher(){
+  if(orderWatchTimer){clearInterval(orderWatchTimer);orderWatchTimer=null}
+  notifying=false;
+}
+
+function logout(){stopOrderWatcher();localStorage.removeItem('cb_admin');t='';login()}
+
 function orders(){let a=os.filter(o=>orderFilter==='All'||o.status===orderFilter);return `<div class="panel"><div class="panelTitle"><div><h2>All Orders</h2><p class="muted">Customer, timing, delivery location and status are all visible here.</p></div><select onchange="orderFilter=this.value;dash('orders')">${['All','New','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled'].map(s=>`<option ${s===orderFilter?'selected':''}>${s}</option>`).join('')}</select></div>${a.length?a.map(orderCard).join(''):`<p class="muted">No orders in this filter.</p>`}</div>`}
 function orderCard(o){return `<div class="order"><div class="orderhead"><div><b>${o.id}</b><div class="muted">Placed ${fmt(o.createdAt)} · Updated ${fmt(o.updatedAt||o.createdAt)}</div></div><span class="badge">${o.status}</span></div><div class="customer"><b>${esc(o.customer.name)}</b><span>📱 ${esc(o.customer.phone)}</span><span>📍 ${esc(o.customer.location)}</span></div><div class="items">${o.items.map(i=>`<span>${i.emoji} ${esc(i.name)} × ${i.qty}</span>`).join('')}</div><div class="orderFoot"><div><b>₹${o.total}</b><div class="muted">${o.payment} · ETA ${o.status==='Delivered'?fmt(o.deliveredAt):fmt(o.estimatedDeliveryAt)}</div></div><div class="actions"><select onchange="st('${o.id}',this.value)">${['New','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select><button class="btn" onclick="details('${o.id}')">Details</button><button class="btn" onclick="chat('${o.id}')">💬 Chat</button>${['Delivered','Cancelled'].includes(o.status)?`<button class="btn dangerBtn" onclick="deleteOrder('${o.id}')">🗑️ Permanent delete</button>`:''}</div></div></div>`}
 function details(id){let o=os.find(x=>x.id===id);app.querySelector('.panel').insertAdjacentHTML('afterbegin',`<div class="detailModal" id="detail"><div class="detailBox"><button class="x" onclick="$('#detail').remove()">×</button><h2>${o.id} · ${o.status}</h2><p><b>Customer:</b> ${esc(o.customer.name)} · ${esc(o.customer.phone)}</p><p><b>Location:</b> ${esc(o.customer.location)}</p><p><b>Placed:</b> ${fmt(o.createdAt)}</p><p><b>Estimated:</b> ${fmt(o.estimatedDeliveryAt)}</p><p><b>Note:</b> ${esc(o.note||'—')}</p><h3>Items</h3><ul>${o.items.map(i=>`<li>${i.emoji} ${esc(i.name)} × ${i.qty} — ₹${i.price*i.qty}</li>`).join('')}</ul><h3>Timeline</h3><div class="miniTimeline">${o.timeline.map(t=>`<div><b>${t.status}</b><span>${fmt(t.at)}</span></div>`).join('')}</div><button class="btn dark" onclick="chat('${o.id}')">💬 Open customer chat</button></div></div>`)}

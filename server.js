@@ -3,6 +3,23 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// Load a local .env file when present. Real hosting environment variables
+// always take precedence and .env is gitignored.
+(function loadLocalEnv() {
+  const envFile = path.join(__dirname, '.env');
+  if (!fs.existsSync(envFile)) return;
+  for (const raw of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const i = line.indexOf('=');
+    if (i < 1) continue;
+    const key = line.slice(0, i).trim();
+    let value = line.slice(i + 1).trim();
+    if ((value.startsWith('\"') && value.endsWith('\"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+})();
+
 const BASE = __dirname;
 const DATA = process.env.CAMPUSBITE_DATA_DIR || path.join(BASE, 'data');
 const PUB = path.join(BASE, 'public');
@@ -23,8 +40,12 @@ const files = {
   settings: path.join(DATA, 'settings.json')
 };
 
-const BOOTSTRAP_ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const BOOTSTRAP_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '').trim();
+const IS_LOCAL_MODE = !String(process.env.DATABASE_URL || '').trim();
+// Local development uses one explicit credential so there is never a mystery password.
+// Production must provide ADMIN_USERNAME and ADMIN_PASSWORD through the hosting dashboard.
+const BOOTSTRAP_ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || (IS_LOCAL_MODE ? 'admin' : '')).trim();
+const BOOTSTRAP_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_LOCAL_MODE ? 'CampusBite@2026!' : '')).trim();
+const ADMIN_BOOTSTRAP_VERSION = String(process.env.ADMIN_BOOTSTRAP_VERSION || '5').trim();
 const DEFAULT_SETTINGS = {
   admin: { username: BOOTSTRAP_ADMIN_USERNAME, password: BOOTSTRAP_ADMIN_PASSWORD },
   commerce: { deliveryEnabled: true, deliveryFee: 20, freeDeliveryThreshold: 199, coupons: [] },
@@ -61,11 +82,16 @@ function hashPassword(password) {
   return `scrypt:${salt}:${hash}`;
 }
 function verifyPassword(password, stored) {
-  if (!stored) return false;
-  if (!String(stored).startsWith('scrypt:')) return String(password) === String(stored);
-  const [, salt, expected] = String(stored).split(':');
-  const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+  try {
+    if (!stored) return false;
+    if (!String(stored).startsWith('scrypt:')) return String(password) === String(stored);
+    const [, salt, expected] = String(stored).split(':');
+    if (!salt || !expected || expected.length !== 128) return false;
+    const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+  } catch (_) {
+    return false;
+  }
 }
 
 function normalizeSettings(s) {
@@ -84,12 +110,21 @@ function normalizeSettings(s) {
 }
 
 async function initStore() {
+  if (!IS_LOCAL_MODE && (!BOOTSTRAP_ADMIN_USERNAME || !BOOTSTRAP_ADMIN_PASSWORD)) {
+    console.error('ADMIN_USERNAME and ADMIN_PASSWORD are required in hosting environment variables.');
+    process.exit(1);
+  }
   if (!DATABASE_URL) {
     ensureLocalFiles();
     const raw = readJson(files.settings);
     const s = normalizeSettings(raw);
-    if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && !s.admin?.bootstrapMigrated) {
-      s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+    if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && s.admin?.bootstrapVersion !== ADMIN_BOOTSTRAP_VERSION) {
+      s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true, bootstrapVersion: ADMIN_BOOTSTRAP_VERSION };
+    } else if (!s.admin?.password) {
+      const localPassword = crypto.randomBytes(12).toString('base64url');
+      s.admin = { username: BOOTSTRAP_ADMIN_USERNAME || 'admin', password: hashPassword(localPassword), bootstrapMigrated: true, bootstrapVersion: ADMIN_BOOTSTRAP_VERSION };
+      console.log(`LOCAL ADMIN CREATED — username: ${s.admin.username} | password: ${localPassword}`);
+      console.log('Save this password, or change it later from Admin → Admin Login.');
     }
     writeJson(files.settings, s);
     console.log('Storage: local JSON files');
@@ -151,8 +186,8 @@ async function initStore() {
         const s = normalizeSettings(raw);
         // One-time admin bootstrap from Render environment variables.
         // It does not overwrite later changes made in Admin -> Security.
-        if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && !s.admin?.bootstrapMigrated) {
-          s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+        if (BOOTSTRAP_ADMIN_USERNAME && BOOTSTRAP_ADMIN_PASSWORD && s.admin?.bootstrapVersion !== ADMIN_BOOTSTRAP_VERSION) {
+          s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true, bootstrapVersion: ADMIN_BOOTSTRAP_VERSION };
           await sql`UPDATE cb_settings SET data=${sql.json(s)} WHERE id=1`;
         } else if (JSON.stringify(s) !== JSON.stringify(raw)) {
           await sql`UPDATE cb_settings SET data=${sql.json(s)} WHERE id=1`;
@@ -323,12 +358,21 @@ async function handle(req, res) {
       const enteredUser = safeText(b.username, 100);
       const enteredPass = String(b.password || '');
       let valid = enteredUser === a.username && verifyPassword(enteredPass, a.password);
-      // One-time recovery: if bootstrapMigrated is false, Render credentials can
-      // safely repair the existing Supabase admin record. After syncing, the
-      // database hash becomes the normal source of truth again.
-      if (!valid && BOOTSTRAP_ADMIN_PASSWORD && enteredUser === BOOTSTRAP_ADMIN_USERNAME &&
-          enteredPass === BOOTSTRAP_ADMIN_PASSWORD && !a.bootstrapMigrated) {
-        s.admin = { username: BOOTSTRAP_ADMIN_USERNAME, password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD), bootstrapMigrated: true };
+
+      // Recovery path: always allow the explicitly configured hosting/local
+      // bootstrap credentials. This is intentionally independent of
+      // bootstrapVersion/bootstrapMigrated because an existing database may
+      // already carry the current version while its stored password is stale.
+      // A successful recovery immediately replaces the stored admin hash.
+      if (!valid && BOOTSTRAP_ADMIN_PASSWORD &&
+          enteredUser === BOOTSTRAP_ADMIN_USERNAME &&
+          enteredPass === BOOTSTRAP_ADMIN_PASSWORD) {
+        s.admin = {
+          username: BOOTSTRAP_ADMIN_USERNAME,
+          password: hashPassword(BOOTSTRAP_ADMIN_PASSWORD),
+          bootstrapMigrated: true,
+          bootstrapVersion: ADMIN_BOOTSTRAP_VERSION
+        };
         await saveSettings(s);
         valid = true;
       }
@@ -340,6 +384,19 @@ async function handle(req, res) {
     }
 
     if (m === 'GET' && p === '/api/admin/orders') { if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' }); return json(res, 200, { orders: await getOrders() }); }
+    if (m === 'GET' && p === '/api/admin/orders/new') {
+      if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
+      const rawAfter = u.searchParams.get('after') || '';
+      const afterMs = rawAfter ? Date.parse(rawAfter) : NaN;
+      if (rawAfter && Number.isNaN(afterMs)) return json(res, 400, { error: 'Invalid after timestamp' });
+      const afterIso = Number.isNaN(afterMs) ? new Date(0).toISOString() : new Date(afterMs).toISOString();
+      if (sql) {
+        const rows = await sql`SELECT data FROM cb_orders WHERE created_at > ${afterIso} ORDER BY created_at ASC LIMIT 20`;
+        return json(res, 200, { orders: rows.map(r => r.data) });
+      }
+      const orders = (await getOrders()).filter(o => Date.parse(o.createdAt || 0) > afterMs).sort((a,b) => Date.parse(a.createdAt || 0) - Date.parse(b.createdAt || 0)).slice(0,20);
+      return json(res, 200, { orders });
+    }
     if (m === 'GET' && p === '/api/admin/products') { if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' }); return json(res, 200, { products: await getProducts() }); }
 
     if (m === 'GET' && p === '/api/orders/history') {
@@ -374,13 +431,12 @@ async function handle(req, res) {
       const freeDelivery = settings.commerce.deliveryEnabled && settings.commerce.freeDeliveryThreshold > 0 && sub >= settings.commerce.freeDeliveryThreshold;
       const delivery = settings.commerce.deliveryEnabled && !freeDelivery ? settings.commerce.deliveryFee : 0;
       const discount = couponResult.discount || 0;
-      for (const item of items) {
-        const prod = ps.find(z => z.id === item.productId);
-        if (prod) prod.stock -= item.qty;
-      }
+      // Stock is intentionally NOT changed when the customer places an order.
+      // It changes only after the admin confirms the order. This prevents
+      // abandoned/new orders from consuming stock.
       const total = Math.max(0, sub + delivery - discount), id = await nextOrderIdFromStore(), now = new Date(), eta = new Date(now.getTime() + 30 * 60000).toISOString();
       if (couponResult.coupon) { const used = settings.commerce.coupons.find(x => x.code === couponResult.coupon.code); if (used) used.usedCount = (used.usedCount || 0) + 1; }
-      const o = { id, createdAt: now.toISOString(), updatedAt: now.toISOString(), estimatedDeliveryAt: eta, status: 'New', payment: 'Cash on Delivery', customer: { name: safeText(b.customer.name, 100), phone: safeText(b.customer.phone, 20), location: safeText(b.customer.location, 200) }, items, subtotal: sub, delivery, coupon: couponResult.coupon?.code || '', discount, total, note: safeText(b.note, 500), timeline: [{ status: 'New', at: now.toISOString() }] };
+      const o = { id, createdAt: now.toISOString(), updatedAt: now.toISOString(), estimatedDeliveryAt: eta, status: 'New', payment: 'Cash on Delivery', customer: { name: safeText(b.customer.name, 100), phone: safeText(b.customer.phone, 20), location: safeText(b.customer.location, 200) }, items, subtotal: sub, delivery, coupon: couponResult.coupon?.code || '', discount, total, note: safeText(b.note, 500), timeline: [{ status: 'New', at: now.toISOString() }], inventoryAdjusted: false, inventoryAdjustedAt: null };
       await saveProducts(ps); await saveSettings(settings); await saveOrder(o); return json(res, 201, { order: o });
     }
 
@@ -430,7 +486,45 @@ async function handle(req, res) {
     if (m === 'PATCH' && p.startsWith('/api/admin/orders/')) {
       if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
       const b = await readBody(req), id = safeText(p.split('/').pop(), 40), os = await getOrders(), o = os.find(x => x.id === id); if (!o) return json(res, 404, { error: 'Order not found' });
-      const allowed = ['New', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled']; if (b.status && allowed.includes(b.status) && b.status !== o.status) addTimeline(o, b.status); await saveOrder(o); return json(res, 200, { order: o });
+      const allowed = ['New', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled'];
+      const nextStatus = String(b.status || '');
+      if (!allowed.includes(nextStatus) || nextStatus === o.status) return json(res, 200, { order: o });
+
+      // Inventory policy: customer checkout creates an order only. Stock is
+      // deducted exactly once when admin confirms it, and restored exactly once
+      // if a confirmed order is cancelled. New/unconfirmed cancellations do not
+      // touch stock. The inventoryAdjusted flag makes repeated status updates safe.
+      if (nextStatus === 'Confirmed' && !o.inventoryAdjusted) {
+        const ps = await getProducts({ fresh: true });
+        for (const item of (o.items || [])) {
+          const prod = ps.find(x => x.id === item.productId);
+          if (!prod || Number(prod.stock) < Number(item.qty || 0)) {
+            return json(res, 400, { error: `Insufficient stock for ${item.name || 'one of the products'}. Order was not confirmed.` });
+          }
+        }
+        for (const item of (o.items || [])) {
+          const prod = ps.find(x => x.id === item.productId);
+          if (prod) prod.stock = Math.max(0, Number(prod.stock || 0) - Number(item.qty || 0));
+        }
+        await saveProducts(ps);
+        o.inventoryAdjusted = true;
+        o.inventoryAdjustedAt = new Date().toISOString();
+      }
+
+      if (nextStatus === 'Cancelled' && o.inventoryAdjusted) {
+        const ps = await getProducts({ fresh: true });
+        for (const item of (o.items || [])) {
+          const prod = ps.find(x => x.id === item.productId);
+          if (prod) prod.stock = Number(prod.stock || 0) + Number(item.qty || 0);
+        }
+        await saveProducts(ps);
+        o.inventoryAdjusted = false;
+        o.inventoryRestoredAt = new Date().toISOString();
+      }
+
+      addTimeline(o, nextStatus);
+      await saveOrder(o);
+      return json(res, 200, { order: o });
     }
     if (m === 'PATCH' && p === '/api/admin/settings') {
       if (!isAuthed(req)) return json(res, 401, { error: 'Unauthorized' });
@@ -450,7 +544,7 @@ async function handle(req, res) {
         const current = s.admin || DEFAULT_SETTINGS.admin;
         if (safeText(b.admin.currentUsername, 100) !== current.username || !verifyPassword(String(b.admin.currentPassword || ''), current.password)) return json(res, 400, { error: 'Current admin username or password is incorrect' });
         const nu = safeText(b.admin.username, 100), np = String(b.admin.password || ''); if (nu.length < 3 || np.length < 6) return json(res, 400, { error: 'New username must be 3+ characters and password 6+ characters' });
-        s.admin = { username: nu, password: hashPassword(np) }; await saveSettings(s); sessions.clear(); return json(res, 200, { changed: true });
+        s.admin = { username: nu, password: hashPassword(np), bootstrapMigrated: true, bootstrapVersion: current.bootstrapVersion || ADMIN_BOOTSTRAP_VERSION }; await saveSettings(s); sessions.clear(); return json(res, 200, { changed: true });
       }
       await saveSettings(s); return json(res, 200, s);
     }

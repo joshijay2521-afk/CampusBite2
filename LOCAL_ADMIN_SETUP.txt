@@ -1,0 +1,18 @@
+CAMPUSBITE LOCAL ADMIN SETUP
+
+LOCAL TEST LOGIN: username = admin, password = CampusBite@2026!
+This fixed local credential is used only when DATABASE_URL is not set. On hosting, credentials MUST come from environment variables.
+
+The .env file is gitignored and must never be uploaded to GitHub.
+
+For Render/Railway, set these environment variables in the hosting dashboard:
+ADMIN_USERNAME
+ADMIN_PASSWORD
+ADMIN_BOOTSTRAP_VERSION=4
+DATABASE_URL
+
+When ADMIN_BOOTSTRAP_VERSION=4 is deployed, an older CampusBite admin record with bootstrap version 2 is repaired once using the hosting ADMIN_USERNAME/ADMIN_PASSWORD values. Later changes made from Admin -> Admin Login are preserved.
+
+
+If an old local .env is causing a login mismatch, run RESET_ADMIN.bat, then START_CAMPUSBITE.bat.
+For an existing Supabase admin record, this build also accepts the configured ADMIN_USERNAME/ADMIN_PASSWORD as a recovery login and immediately synchronizes the stored hash.

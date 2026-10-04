@@ -12,9 +12,11 @@ LOCAL TEST
 5. Open the URL printed in the terminal (usually http://localhost:3001).
 6. Admin: add /admin to that same URL.
 
-Default local admin login:
-Username: admin
-Password: set ADMIN_PASSWORD in your environment
+Local admin login:
+Username: the value of ADMIN_USERNAME
+Password: the value of ADMIN_PASSWORD
+
+Create a local .env (gitignored) before starting if you want a fixed local login. The server now loads .env automatically.
 
 IMPORTANT: change the admin login before making the store public.
 
@@ -115,10 +117,10 @@ Keep this folder structure exactly as it is. The folder you open in VS Code
 must be the one where server.js, package.json, public, and data are visible.
 
 
-BOOTSTRAP ADMIN (change after first login)
-Username: admin
-Password: CampusBite@2026!
-Use Admin → Admin Login to change these credentials after deployment.
+BOOTSTRAP ADMIN
+Set ADMIN_USERNAME and ADMIN_PASSWORD in Render/Railway environment variables.
+ADMIN_BOOTSTRAP_VERSION=3 repairs stale cb_settings credentials once; later Admin → Security changes are preserved.
+Never commit real passwords, DATABASE_URL, or service-role keys to GitHub.
 
 
 FINAL V4 NOTES
@@ -127,3 +129,12 @@ FINAL V4 NOTES
 - Permanent order deletion is allowed only for Delivered or Cancelled orders, enforced on the server.
 - Permanent product deletion is admin-authenticated.
 - Netlify requires the real Render service hostname in netlify.toml before deployment.
+
+ADMIN NEW-ORDER NOTIFICATION
+-----------------------------
+The admin dashboard now supports browser/device notifications for newly placed orders.
+1. Open the Admin dashboard on the admin device/browser.
+2. Click "🔔 Enable notifications" once and allow browser notifications.
+3. Keep the Admin dashboard open (the tab may be in the background).
+4. New orders are checked every 8 seconds and show a device notification with order ID, customer name and total.
+5. This is a browser notification feature; it does not send a push notification when the Admin dashboard/browser is completely closed.
